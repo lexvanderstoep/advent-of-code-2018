@@ -1,31 +1,20 @@
 import math
 import re
 from dataclasses import dataclass
+
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 from tqdm.std import tqdm
 
 
 @dataclass(frozen=True)
-class Vector:
-    x: int
-    y: int
-
-    def __add__(self, other):
-        return Vector(self.x + other.x, self.y + other.y)
+class Grid:
+    positions: np.array
+    velocities: np.array
 
 
-    def distance(self, other) -> float:
-        return math.sqrt(math.pow(self.x - other.x, 2) + math.pow(self.y - other.y, 2))
-
-
-@dataclass(frozen=True)
-class Point:
-    position: Vector
-    velocity: Vector
-
-
-def parse_point(file_line: str) -> Point:
+def parse_point(file_line: str) -> ((int, int), (int, int)):
     pattern = r"position=<\s*(-?\d+),\s*(-?\d+)> velocity=<\s*(-?\d+),\s*(-?\d+)>"
     match = re.match(pattern, file_line)
 
@@ -33,40 +22,42 @@ def parse_point(file_line: str) -> Point:
         raise ValueError(f'Unable to parse input line {file_line}, expected pattern {pattern}')
 
     pos_x, pos_y, vel_x, vel_y = map(int, match.groups())
-    return Point(Vector(pos_x, pos_y), Vector(vel_x, vel_y))
+    return (pos_x, pos_y), (vel_x, vel_y)
 
 
-def parse_input(file_path: str) -> list[Point]:
+def points_to_grid(points: list[tuple[tuple[int, int], tuple[int, int]]]) -> Grid:
+    positions: np.array = np.array([(p[0][0], p[0][1]) for p in points])
+    velocities: np.array = np.array([(p[1][0], p[1][1]) for p in points])
+    return Grid(positions, velocities)
+
+
+def parse_input(file_path: str) -> Grid:
     with open(file_path, 'r') as file:
-        return [parse_point(line) for line in file.readlines()]
+        return points_to_grid([parse_point(line) for line in file.readlines()])
 
 
-def step(points: list[Point]) -> list[Point]:
-    return [Point(p.position + p.velocity, p.velocity) for p in points]
+def step(grid: Grid) -> Grid:
+    return Grid(grid.positions + grid.velocities, grid.velocities)
 
 
-def area_score(points: list[Point]) -> int:
-    min_x = min([p.position.x for p in points])
-    max_x = max([p.position.x for p in points])
-    min_y = min([p.position.y for p in points])
-    max_y = max([p.position.y for p in points])
-    return (max_x - min_x) * (max_y - min_y)
+def cross_section_score(grid: Grid) -> float:
+    min_x = min(grid.positions[:, 0])
+    max_x = max(grid.positions[:, 0])
+    min_y = min(grid.positions[:, 1])
+    max_y = max(grid.positions[:, 1])
+    return math.sqrt((max_x - min_x) * (max_y - min_y))
 
 
-def unique_lines_score(points: list[Point]) -> int:
-    unique_x = set([p.position.x for p in points])
-    unique_y = set([p.position.y for p in points])
+def unique_lines_score(grid: Grid) -> int:
+    unique_x = np.unique(grid.positions[:, 0])
+    unique_y = np.unique(grid.positions[:, 1])
     return len(unique_x) + len(unique_y)
 
 
-def standard_deviation_score(points: list[Point]) -> float:
-    median_point = Vector(
-        int(sum([p.position.x for p in points]) / len(points)),
-        int(sum([p.position.y for p in points]) / len(points))
-    )
-
-    std_deviation = sum([math.pow(p.position.distance(median_point), 2) for p in points]) / len(points)
-    return std_deviation
+def standard_deviation_score(grid: Grid) -> float:
+    median_point = np.mean(grid.positions, axis=0)
+    distances = np.linalg.norm(grid.positions - median_point, axis=1)
+    return np.std(distances)
 
 
 def normalise_scores(scores: pd.Series) -> pd.Series:
@@ -75,9 +66,9 @@ def normalise_scores(scores: pd.Series) -> pd.Series:
     return (scores - scores.min()) / (scores.max() - scores.min())
 
 
-def plot_grid(points: list[Point]):
-    x_coords = [p.position.x for p in points]
-    y_coords = [p.position.y for p in points]
+def plot_grid(grid: Grid):
+    x_coords = grid.positions[:, 0]
+    y_coords = grid.positions[:, 1]
 
     plt.scatter(x_coords, y_coords, color='blue')
     plt.grid(True, which='both', linestyle='--', linewidth=0.5)
@@ -90,18 +81,19 @@ def plot_grid(points: list[Point]):
 
 
 def compute_part_one(file_name: str):
-    points_timelines = [parse_input(file_name)]
+    grid_timeline = [parse_input(file_name)]
 
-    scores = pd.DataFrame(columns=['area', 'unique_lines', 'std_dev'])
+    scores = pd.DataFrame(columns=['cross_section', 'unique_lines', 'std_dev'])
+
 
     for _ in tqdm(range(20000)):
-        points = points_timelines[-1]
+        grid = grid_timeline[-1]
         scores.loc[len(scores)] = {
-            'area': math.log(area_score(points)),
-            'unique_lines': math.log(unique_lines_score(points)),
-            'std_dev': math.log(standard_deviation_score(points)),
+            'cross_section': cross_section_score(grid),
+            'unique_lines': unique_lines_score(grid),
+            'std_dev': standard_deviation_score(grid),
         }
-        points_timelines.append(step(points))
+        grid_timeline.append(step(grid))
 
     scores = scores.apply(normalise_scores, axis='rows')
     minimum_scores = scores.idxmin()
@@ -109,7 +101,7 @@ def compute_part_one(file_name: str):
 
     scores.plot(label=minimum_scores)
     plt.show()
-    plot_grid(points_timelines[mode_minimum_index])
+    plot_grid(grid_timeline[mode_minimum_index])
 
     print(minimum_scores)
 
